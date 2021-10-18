@@ -1,1 +1,3 @@
 kube-strace
+kubectl-strace
+bin/
