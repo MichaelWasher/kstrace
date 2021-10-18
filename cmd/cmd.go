@@ -116,7 +116,15 @@ func (kStrace *KubeStraceCall) Run() error {
 		return err
 	}
 
-	log.Trace("Running strace on the following pods: %v", kStrace.pods)
+	// options := kstrace.PrivilegedPodOptions{
+	// 	Namespace:     "openshift-kube-scheduler-operator",
+	// 	ContainerName: "container-name",
+	// 	Image:         "quay.io/prometheus/busybox:latest",
+	// 	NodeName:      "uat-tjp8f-worker-tkm7q",
+	// }
+	// kstrace.CreateStracePod(options, kStrace.clientset)
+
+	log.Tracef("Running strace on the following pods: %v", kStrace.pods)
 	return nil
 }
 
