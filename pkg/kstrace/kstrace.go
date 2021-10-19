@@ -6,6 +6,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -110,6 +111,17 @@ func waitForPodRunning(clientset kubernetes.Interface, namespace string, pod str
 		time.Sleep(time.Second)
 	}
 	return nil
+}
+
+func CreateNamespace(ctx context.Context, clientset kubernetes.Interface) (*corev1.Namespace, error) {
+	return clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "kstrace-",
+			Labels: map[string]string{
+				"kstrace-generated-namespace": "",
+			},
+		},
+	}, metav1.CreateOptions{})
 }
 
 func CreateStracePod(ctx context.Context, options PrivilegedPodOptions, clientset kubernetes.Interface) (*corev1.Pod, error) {
