@@ -18,3 +18,5 @@ all:
 	GOOS=linux GOARCH=amd64 go build -o bin/${PROJECT_NAME}-linux main.go
 	GOOS=darwin GOARCH=amd64 go build -o bin/${PROJECT_NAME}-darwin main.go
 
+test:
+	go test -race ./...
