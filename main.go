@@ -15,7 +15,7 @@ func main() {
 
 	root := cmd.NewKubeStraceCommand()
 	if err := root.Execute(); err != nil {
-		log.Debug("The program has failed with error: %v", err)
+		log.Debugf("The program has failed with error: %v", err)
 		log.Fatal("The program has encountered a problem and needs to close. Please try again.")
 		os.Exit(1)
 	}
