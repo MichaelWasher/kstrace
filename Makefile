@@ -20,3 +20,7 @@ all:
 
 test:
 	go test -race ./...
+
+test-e2e:
+	# TODO: Add e2e testing for the project
+	true 
