@@ -1,56 +1,68 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"github.com/michaelwasher/kube-strace/pkg/kstrace"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 	"k8s.io/kubectl/pkg/scheme"
 )
 
-type KubeStraceCall struct {
-	clientset *kubernetes.Clientset
-	pods      []corev1.Pod
-	builder   *resource.Builder
-}
+type KubeStraceCommand struct {
+	clientset  *kubernetes.Clientset
+	targetPods []corev1.Pod
 
-func NewKubeStraceCall() *KubeStraceCall {
-	return &KubeStraceCall{}
+	builder    *resource.Builder
+	restConfig *rest.Config
+
+	kubeConfigFlags *genericclioptions.ConfigFlags
+
+	tracers  []*kstrace.KStracer
+	loglevel log.Level
 }
 
 func NewKubeStraceCommand() *cobra.Command {
-	kStrace := NewKubeStraceCall()
+	kCmd := &KubeStraceCommand{
+		loglevel: log.TraceLevel,
+	}
 	cmd := &cobra.Command{
 		Use:   "kubectl-strace",
 		Short: "Run strace against Pods and Deployments in Kubernetes",
 		Long: `kubectl-strace is a CLI tool that provides the ability to easily perform
 		debugging of system-calls and process state for applications running on the Kubernetes platform.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := kStrace.Complete(cmd, args); err != nil {
+
+			if err := kCmd.Complete(cmd, args); err != nil {
 				return err
 			}
-			if err := kStrace.Validate(); err != nil {
+			if err := kCmd.Validate(); err != nil {
 				return err
 			}
-			if err := kStrace.Run(); err != nil {
+			if err := kCmd.Run(); err != nil {
 				return err
 			}
 
 			return nil
 		},
 	}
+	flags := cmd.PersistentFlags()
+	kCmd.kubeConfigFlags = genericclioptions.NewConfigFlags(true)
+	kCmd.kubeConfigFlags.AddFlags(flags)
 
 	return cmd
 }
 
-func getClientSet() (*kubernetes.Clientset, error) {
+func (kCmd *KubeStraceCommand) configureClientset() error {
 	var err error
 
 	configFlags := genericclioptions.NewConfigFlags(true)
@@ -60,33 +72,34 @@ func getClientSet() (*kubernetes.Clientset, error) {
 	).ClientConfig()
 
 	if err != nil {
-		return nil, err
+		return err
 	}
 	restConfig.Timeout = 30 * time.Second
 
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return clientset, nil
-}
-func (kStrace *KubeStraceCall) Complete(cmd *cobra.Command, args []string) error {
-	var err error
-	// TODO Parse the flags from the Cobra Command
-	// TODO use this as a flag
-	// if kStrace.LogLevel {
-	log.Info("run in debug mode")
-	log.SetLevel(log.DebugLevel)
-	// }
+	kCmd.clientset, kCmd.restConfig = clientset, restConfig
 
-	kStrace.clientset, err = getClientSet()
+	return nil
+}
+func (kCmd *KubeStraceCommand) Complete(cmd *cobra.Command, args []string) error {
+	var err error
+
+	if kCmd.loglevel != log.InfoLevel {
+		log.Infof("Running with loglevel: %v", kCmd.loglevel)
+		log.SetLevel(kCmd.loglevel)
+	}
+
+	err = kCmd.configureClientset()
 	if err != nil {
 		return err
 	}
-	// Include the Kubectl factory for flags
-	kubeConfigFlags := genericclioptions.NewConfigFlags(true).WithDeprecatedPasswordFlag()
-	matchVersionKubeConfigFlags := cmdutil.NewMatchVersionFlags(kubeConfigFlags)
+
+	// Create flag factory
+	matchVersionKubeConfigFlags := cmdutil.NewMatchVersionFlags(kCmd.kubeConfigFlags)
 	f := cmdutil.NewFactory(matchVersionKubeConfigFlags)
 
 	// TODO Deal with -n Namespace overwrites
@@ -95,36 +108,56 @@ func (kStrace *KubeStraceCall) Complete(cmd *cobra.Command, args []string) error
 		return err
 	}
 
-	kStrace.builder = f.NewBuilder().
+	kCmd.builder = f.NewBuilder().
 		WithScheme(scheme.Scheme, scheme.Scheme.PrioritizedVersionsAllGroups()...).
 		ResourceNames("pod", args...).NamespaceParam(namespace).DefaultNamespace()
 
 	return nil
 }
 
-func (kStrace *KubeStraceCall) Validate() error {
+func (kCmd *KubeStraceCommand) Validate() error {
 	// TODO Perform Validation on the Flags
 	return nil
 }
-func (kStrace *KubeStraceCall) Run() error {
-	// TODO Main logic
-	// TODO
-	var err error
 
-	kStrace.pods, err = processResources(kStrace.builder, kStrace.clientset)
+func (kCmd *KubeStraceCommand) Run() error {
+	var err error
+	ctx := context.TODO()
+
+	// Collect target pods
+	kCmd.targetPods, err = processResources(kCmd.builder, kCmd.clientset)
 	if err != nil {
 		return err
 	}
 
-	// options := kstrace.PrivilegedPodOptions{
-	// 	Namespace:     "openshift-kube-scheduler-operator",
-	// 	ContainerName: "container-name",
-	// 	Image:         "quay.io/prometheus/busybox:latest",
-	// 	NodeName:      "uat-tjp8f-worker-tkm7q",
-	// }
-	// kstrace.CreateStracePod(options, kStrace.clientset)
+	// Create namespace for Strace Pods
+	ns, err := kstrace.CreateNamespace(ctx, kCmd.clientset)
+	defer kstrace.CleanupNamespace(ctx, kCmd.clientset, ns.Name)
 
-	log.Tracef("Running strace on the following pods: %v", kStrace.pods)
+	if err != nil {
+		return err
+	}
+
+	// Create Tracers for each Pod
+	for _, targetPod := range kCmd.targetPods {
+		tracer := kstrace.NewKStracer(kCmd.clientset, kCmd.restConfig, &targetPod, ns.Name)
+		kCmd.tracers = append(kCmd.tracers, tracer)
+	}
+
+	// TODO: Configure the desired output streams
+	for _, tracer := range kCmd.tracers {
+		// TODO Place in goroutine
+		err = tracer.Start()
+
+		// Configure Cleanup
+		defer tracer.Cleanup()
+		defer tracer.Stop()
+
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

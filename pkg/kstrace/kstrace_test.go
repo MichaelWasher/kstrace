@@ -19,7 +19,6 @@ func SetPodStatusPhaseRunning(action testingcore.Action) (handled bool, ret runt
 }
 
 // TODO: Add test to ensure strace Pod and Namespace are cleaned up correctly
-
 func TestCreatePrivilegedPod(t *testing.T) {
 
 	tests := []struct {
@@ -48,8 +47,11 @@ func TestCreatePrivilegedPod(t *testing.T) {
 			for _, reactor := range tc.prependReactions {
 				clientset.PrependReactor("create", "pods", reactor)
 			}
+			tracer := KStracer{
+				client: clientset,
+			}
 
-			pod, err := CreateStracePod(ctx, tc.options, clientset)
+			pod, err := tracer.CreateStracePod(ctx, tc.options)
 			if err != nil {
 				t.Errorf("Pod creation failed. %v", err)
 			}
@@ -67,7 +69,6 @@ func TestCreatePrivilegedPod(t *testing.T) {
 			if returnedPod.Spec.Containers[0].Image != tc.options.Image {
 				t.Errorf("Image mismatch. Expected %q, Got: %q", tc.options.Image, returnedPod.Spec.Containers[0].Image)
 			}
-
 		})
 	}
 }
