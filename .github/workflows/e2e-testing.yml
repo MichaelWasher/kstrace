@@ -16,6 +16,15 @@ jobs:
       uses: actions/setup-go@v2
       with:
         go-version: 1.17
+    
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
    
     - uses: AbsaOSS/k3d-action@v1.5.0
       name: "Create cluster"

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: target-pod
+spec:
+  containers:
+  - image: alpine:latest
+    name: target-pod
+    command:
+    - sh
+    - -c
+    - "while : ; do touch /tmp/test-file; sleep 1; done"
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always

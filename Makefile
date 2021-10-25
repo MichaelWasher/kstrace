@@ -22,5 +22,4 @@ test:   build
 	go test -race ./...
 
 test-e2e: build
-	# TODO: Add e2e testing for the project
-	true
+	cd test && bash ./basic_test.sh || kubectl get pods -o yaml -A && kubectl get events -A
