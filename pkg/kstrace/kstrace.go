@@ -27,6 +27,7 @@ type KStracer struct {
 	traceImage     string
 	containerPIDs  []int64
 	restConfig     *rest.Config
+	socketPath     string
 }
 
 type PrivilegedPodOptions struct {
@@ -34,6 +35,7 @@ type PrivilegedPodOptions struct {
 	ContainerName string
 	Image         string
 	NodeName      string
+	SocketPath    string
 }
 
 type Tracer interface {
@@ -42,13 +44,14 @@ type Tracer interface {
 	Cleanup() error
 }
 
-func NewKStracer(clientset kubernetes.Interface, restConfig *rest.Config, targetPod *corev1.Pod, namespace string) *KStracer {
+func NewKStracer(clientset kubernetes.Interface, restConfig *rest.Config, traceImage string, targetPod *corev1.Pod, namespace string, socketPath string) *KStracer {
 	straceObject := KStracer{
-		traceImage:     "quay.io/mwasher/crictl:0.0.2",
+		traceImage:     traceImage,
 		traceNamespace: namespace,
 		restConfig:     restConfig,
 		client:         clientset,
 		targetPod:      targetPod,
+		socketPath:     socketPath,
 	}
 
 	return &straceObject
@@ -56,8 +59,6 @@ func NewKStracer(clientset kubernetes.Interface, restConfig *rest.Config, target
 
 func getPodDefinition(options PrivilegedPodOptions) *corev1.Pod {
 	// Change with different runtimes
-	socketPath := "/run/crio/crio.sock"
-
 	typeMetadata := metav1.TypeMeta{
 		Kind:       "Pod",
 		APIVersion: "v1",
@@ -71,7 +72,7 @@ func getPodDefinition(options PrivilegedPodOptions) *corev1.Pod {
 		},
 	}
 
-	// TODO: This should work with all dockershim / containerd / docker as they all speak OCI
+	// Mount the CRI socket through
 	directoryType := corev1.HostPathSocket
 	volumeMounts := []corev1.VolumeMount{
 		{
@@ -85,7 +86,7 @@ func getPodDefinition(options PrivilegedPodOptions) *corev1.Pod {
 			Name: "runtime-socket",
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
-					Path: socketPath,
+					Path: options.SocketPath,
 					Type: &directoryType,
 				},
 			},
@@ -147,6 +148,7 @@ func waitForPodRunning(clientset kubernetes.Interface, namespace string, pod str
 		if checkPodState() {
 			break
 		}
+		log.Debugf("Waiting for Tracer Pod %q to become ready", pod)
 		time.Sleep(time.Second)
 	}
 	return nil
@@ -156,13 +158,18 @@ func (tracer *KStracer) Start() error {
 	var err error
 	ctx := context.TODO()
 
+	// Create the Strace Pod
 	options := PrivilegedPodOptions{
 		Namespace:     tracer.traceNamespace,
 		ContainerName: "container-name",
 		Image:         tracer.traceImage,
 		NodeName:      tracer.targetPod.Spec.NodeName,
+		SocketPath:    tracer.socketPath,
 	}
 	tracer.tracePod, err = tracer.CreateStracePod(ctx, options)
+	if err != nil {
+		return err
+	}
 
 	// Find out the PID for the requested Pod
 	log.Infof("Running strace on pod %q", tracer.targetPod.Name)
@@ -173,12 +180,14 @@ func (tracer *KStracer) Start() error {
 
 	// Run Strace for collected containerPIDs
 	for _, containerPID := range tracer.containerPIDs {
+		log.Debugf("Running strace on container %d", containerPID)
 		err = tracer.StartStrace(containerPID)
 		if err != nil {
 			return err
 		}
 	}
 
+	log.Info("Strace complete")
 	return err
 }
 
@@ -188,6 +197,7 @@ func (tracer *KStracer) Stop() error {
 }
 
 func (tracer *KStracer) CreateStracePod(ctx context.Context, options PrivilegedPodOptions) (*corev1.Pod, error) {
+	// TODO: ensure that the target pod is actually active
 	podDefinition := getPodDefinition(options)
 	createdPod, err := tracer.client.CoreV1().Pods(options.Namespace).Create(ctx, podDefinition, metav1.CreateOptions{})
 	if err != nil {
@@ -253,6 +263,7 @@ func (tracer *KStracer) FindPodPIDs() ([]int64, error) {
 	containerPIDs := []int64{}
 
 	for _, containerStatus := range tracer.targetPod.Status.ContainerStatuses {
+
 		containerID := strings.SplitAfter(containerStatus.ContainerID, "//")[1]
 
 		command := fmt.Sprintf("crictl inspect %s", containerID)
@@ -279,6 +290,12 @@ func (tracer *KStracer) FindPodPIDs() ([]int64, error) {
 		containerPIDs = append(containerPIDs, containerPID)
 
 	}
+
+	if len(containerPIDs) < 1 {
+		log.Errorf("No container PIDs found for Pod %q", tracer.targetPod)
+		return nil, fmt.Errorf("no container pids found from %q", tracer.targetPod)
+	}
+
 	// Run command in Pod
 	return containerPIDs, nil
 }

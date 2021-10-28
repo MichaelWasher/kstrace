@@ -18,7 +18,12 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 )
 
+type KubeStraceCommandArgs struct {
+	traceImage *string
+	socketPath *string
+}
 type KubeStraceCommand struct {
+	KubeStraceCommandArgs
 	clientset  *kubernetes.Clientset
 	targetPods []corev1.Pod
 
@@ -35,6 +40,7 @@ func NewKubeStraceCommand() *cobra.Command {
 	kCmd := &KubeStraceCommand{
 		loglevel: log.TraceLevel,
 	}
+
 	cmd := &cobra.Command{
 		Use:   "kubectl-strace",
 		Short: "Run strace against Pods and Deployments in Kubernetes",
@@ -55,9 +61,14 @@ func NewKubeStraceCommand() *cobra.Command {
 			return nil
 		},
 	}
+	// Add Kubectl / Kubernetes CLI flags
 	flags := cmd.PersistentFlags()
 	kCmd.kubeConfigFlags = genericclioptions.NewConfigFlags(true)
 	kCmd.kubeConfigFlags.AddFlags(flags)
+
+	// Add command-specific flags
+	kCmd.socketPath = flags.String("socket-path", "/run/crio/crio.sock", "The location of the CRI socket on the host machine. The defaults for common runtimes are as below: [ default /run/crio/crio.sock ] used to mount through")
+	kCmd.traceImage = flags.String("image", "quay.io/mwasher/crictl:0.0.2", "The trace image for use when performing the strace.")
 
 	return cmd
 }
@@ -140,7 +151,8 @@ func (kCmd *KubeStraceCommand) Run() error {
 
 	// Create Tracers for each Pod
 	for _, targetPod := range kCmd.targetPods {
-		tracer := kstrace.NewKStracer(kCmd.clientset, kCmd.restConfig, &targetPod, ns.Name)
+		tracer := kstrace.NewKStracer(kCmd.clientset, kCmd.restConfig, *kCmd.traceImage, &targetPod, ns.Name, *kCmd.socketPath)
+
 		kCmd.tracers = append(kCmd.tracers, tracer)
 	}
 
