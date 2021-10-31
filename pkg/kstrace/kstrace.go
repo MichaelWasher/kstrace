@@ -3,6 +3,7 @@ package kstrace
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -46,7 +48,8 @@ type Tracer interface {
 	Cleanup() error
 }
 
-func NewKStracer(clientset kubernetes.Interface, restConfig *rest.Config, traceImage string, targetPod *corev1.Pod, namespace string, socketPath string, timeout time.Duration, outputDirectory string) *KStracer {
+func NewKStracer(clientset kubernetes.Interface, restConfig *rest.Config, traceImage string, targetPod *corev1.Pod, namespace string, socketPath string,
+	timeout time.Duration, outputDirectory string) Tracer {
 	straceObject := KStracer{
 		traceImage:     traceImage,
 		traceNamespace: namespace,
@@ -167,6 +170,46 @@ func waitForPodRunning(clientset kubernetes.Interface, namespace string, pod str
 	return nil
 }
 
+func (tracer *KStracer) getIOStream(container string) (*genericclioptions.IOStreams, error) {
+	var err error
+
+	// Special case for std-out
+	if tracer.outputDirectory == "-" {
+		return &genericclioptions.IOStreams{Out: os.Stdout, In: nil, ErrOut: os.Stderr}, nil
+	}
+
+	// Ensure trace folder is present
+	if _, err := os.Stat(tracer.outputDirectory); errors.Is(err, os.ErrNotExist) {
+		err = os.Mkdir(tracer.outputDirectory, 0775)
+		if err != nil {
+			log.Infof("Unable to create directory for the strace collection. %v", err)
+			return nil, err
+		}
+	}
+
+	// Ensure Pod-folder is present
+	podTraceFolder := fmt.Sprintf("%s%c%s", tracer.outputDirectory, os.PathSeparator, tracer.targetPod.Name)
+	if _, err := os.Stat(podTraceFolder); errors.Is(err, os.ErrNotExist) {
+		err = os.Mkdir(podTraceFolder, 0775)
+		if err != nil {
+			log.Infof("Unable to create directory for the strace collection. %v", err)
+			return nil, err
+		}
+	}
+	// Create file for container trace
+	fileWriter, err := os.Create(fmt.Sprintf("%s/%s/%s_strace.log", tracer.outputDirectory, tracer.targetPod.Name, container))
+	if err != nil {
+		log.Infof("Unable to create logfile for the strace collection. %v", err)
+		return nil, err
+	}
+
+	return &genericclioptions.IOStreams{
+		Out:    fileWriter,
+		ErrOut: fileWriter,
+		In:     nil,
+	}, nil
+}
+
 func (tracer *KStracer) Start() error {
 	var err error
 	ctx := context.TODO()
@@ -192,9 +235,16 @@ func (tracer *KStracer) Start() error {
 	}
 
 	// Run Strace for collected containerPIDs
-	for _, containerPID := range tracer.containerPIDs {
+	for index, containerPID := range tracer.containerPIDs {
 		log.Debugf("Running strace on container %d", containerPID)
-		err = tracer.StartStrace(containerPID)
+
+		// Write to a file with the container name
+		iostream, err := tracer.getIOStream(tracer.targetPod.Spec.Containers[index].Name)
+		if err != nil {
+			return err
+		}
+
+		err = tracer.StartStrace(containerPID, iostream)
 		if err != nil {
 			return err
 		}
@@ -230,25 +280,20 @@ func (tracer *KStracer) CreateStracePod(ctx context.Context, options PrivilegedP
 	return createdPod, nil
 }
 
-func (tracer *KStracer) StartStrace(targetPID int64) error {
-	// TODO Replace with other stream
-	// TODO Set timeout for collection
-	stdOut := os.Stdout
-	stdErr := os.Stderr
-
+func (tracer *KStracer) StartStrace(targetPID int64, iostreams *genericclioptions.IOStreams) error {
 	command := fmt.Sprintf("strace -fp %d", targetPID)
 	log.Infof("Running command %q inside pod %q", command, tracer.tracePod.Name)
 
 	execRequest := ExecRequest{
 		Client: tracer.client, RestConfig: tracer.restConfig, PodName: tracer.tracePod.Name,
-		Namespace: tracer.tracePod.Namespace, Command: command, Stdin: nil,
-		Stdout: stdOut, Stderr: stdErr, TTY: false,
+		Namespace: tracer.tracePod.Namespace, Command: command, TTY: false, IOStreams: iostreams,
 	}
 	exitCode, err := ExecCommand(execRequest)
 
 	if exitCode != 0 {
 		return fmt.Errorf("the function has failed with exit code: %d", exitCode)
 	}
+	log.Infof("Strace command for Pod %q complete", tracer.tracePod.Name)
 
 	if err != nil {
 		return err
@@ -274,8 +319,9 @@ func (tracer *KStracer) Cleanup() error {
 
 func (tracer *KStracer) FindPodPIDs() ([]int64, error) {
 	// Specific to Crictl
-	stdOut := new(bytes.Buffer)
-	stdErr := new(bytes.Buffer)
+	iostreams := &genericclioptions.IOStreams{
+		In: nil, Out: new(bytes.Buffer), ErrOut: new(bytes.Buffer),
+	}
 
 	// Get all Container IDs for Pod
 	containerPIDs := []int64{}
@@ -289,8 +335,7 @@ func (tracer *KStracer) FindPodPIDs() ([]int64, error) {
 
 		execRequest := ExecRequest{
 			Client: tracer.client, RestConfig: tracer.restConfig, PodName: tracer.tracePod.Name,
-			Namespace: tracer.tracePod.Namespace, Command: command, Stdin: nil,
-			Stdout: stdOut, Stderr: stdErr, TTY: false,
+			Namespace: tracer.tracePod.Namespace, Command: command, IOStreams: iostreams, TTY: false,
 		}
 		exitCode, err := ExecCommand(execRequest)
 		if exitCode != 0 || err != nil {
@@ -298,13 +343,15 @@ func (tracer *KStracer) FindPodPIDs() ([]int64, error) {
 		}
 
 		// Process JSON
-		json := stdOut.Bytes()
+		// TODO perform checks against casting
+		json := iostreams.Out.(*bytes.Buffer).Bytes()
+
 		containerPID, err := jsonparser.GetInt(json, "info", "pid")
 		if err != nil {
 			return nil, err
 		}
 
-		log.Infof("Container PID %q found for Pod %q", containerPID, containerID)
+		log.Infof("Container PID %d found for Container %q", containerPID, containerID)
 		containerPIDs = append(containerPIDs, containerPID)
 
 	}

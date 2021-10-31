@@ -4,17 +4,21 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/michaelwasher/kube-strace/pkg/kstrace"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+
 	corev1 "k8s.io/api/core/v1"
+
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 	"k8s.io/kubectl/pkg/scheme"
 )
@@ -35,7 +39,7 @@ type KubeStraceCommand struct {
 	traceTimeout time.Duration
 
 	// Command state
-	tracers    []*kstrace.KStracer
+	tracers    []kstrace.Tracer
 	targetPods []corev1.Pod
 
 	// GenericCLI Options
@@ -214,16 +218,25 @@ func (kCmd *KubeStraceCommand) Run() error {
 	}
 
 	// Create Tracers for each Pod
+	var tracerWaitGroup sync.WaitGroup
 	for _, targetPod := range kCmd.targetPods {
-		tracer := kstrace.NewKStracer(kCmd.clientset, kCmd.restConfig, *kCmd.traceImage, &targetPod, ns.Name, *kCmd.socketPath, kCmd.traceTimeout, *kCmd.outputDirectory)
+		pod := targetPod
+		tracer := kstrace.NewKStracer(kCmd.clientset, kCmd.restConfig, *kCmd.traceImage, &pod, ns.Name, *kCmd.socketPath, kCmd.traceTimeout, *kCmd.outputDirectory)
 		kCmd.tracers = append(kCmd.tracers, tracer)
 	}
 
 	for _, tracer := range kCmd.tracers {
-		// TODO Place in goroutine
-		err = tracer.Start()
+		// Overwrite tracer with local variable
+		tracer := tracer
 
-		// Configure Cleanup
+		// Async start all tracers
+		tracerWaitGroup.Add(1)
+		go func() {
+			err = tracer.Start()
+			tracerWaitGroup.Done()
+		}()
+
+		// Clean up on function return
 		defer tracer.Cleanup()
 		defer tracer.Stop()
 
@@ -231,17 +244,21 @@ func (kCmd *KubeStraceCommand) Run() error {
 			return err
 		}
 	}
+	tracerWaitGroup.Wait()
 
 	return nil
 }
 
 func processResources(builder *resource.Builder, clientset *kubernetes.Clientset) ([]corev1.Pod, error) {
+	// Build the CLI requests
 	r := builder.Do()
 	podSlice := []corev1.Pod{}
+
 	err := r.Visit(func(info *resource.Info, err error) error {
 		if err != nil {
 			// TODO(verb): configurable early return
 			return err
+
 		}
 		var visitErr error
 
@@ -262,8 +279,9 @@ func processResources(builder *resource.Builder, clientset *kubernetes.Clientset
 	if err != nil {
 		return nil, err
 	}
+
 	/// Build the list of Nodes and Pods to select from; With
-	log.Debugf("Pod List: '%v'", podSlice)
+	log.Tracef("Pod List: '%v'", podSlice)
 
 	return podSlice, nil
 }
