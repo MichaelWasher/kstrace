@@ -72,7 +72,7 @@ func ExecCommand(reqOptions ExecRequest) (int, error) {
 }
 
 func CreateNamespace(ctx context.Context, clientset kubernetes.Interface) (*corev1.Namespace, error) {
-	return clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+	ns, err := clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "kstrace-",
 			Labels: map[string]string{
@@ -80,6 +80,13 @@ func CreateNamespace(ctx context.Context, clientset kubernetes.Interface) (*core
 			},
 		},
 	}, metav1.CreateOptions{})
+
+	if err == nil {
+		log.Infof("Namespace %q Created", ns.Name)
+	}
+
+	return ns, err
+
 }
 
 func CleanupNamespace(ctx context.Context, client kubernetes.Interface, namespace string) error {

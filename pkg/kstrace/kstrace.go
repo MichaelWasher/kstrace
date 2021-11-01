@@ -20,14 +20,16 @@ import (
 )
 
 type KStracer struct {
-	client         kubernetes.Interface
-	targetPod      *corev1.Pod
-	traceNamespace string
-	tracePod       *corev1.Pod
-	traceImage     string
-	containerPIDs  []int64
-	restConfig     *rest.Config
-	socketPath     string
+	client            kubernetes.Interface
+	targetPod         *corev1.Pod
+	traceNamespace    string
+	tracePod          *corev1.Pod
+	traceImage        string
+	containerPIDs     []int64
+	restConfig        *rest.Config
+	socketPath        string
+	collectionTimeout time.Duration
+	outputDirectory   string
 }
 
 type PrivilegedPodOptions struct {
@@ -44,7 +46,7 @@ type Tracer interface {
 	Cleanup() error
 }
 
-func NewKStracer(clientset kubernetes.Interface, restConfig *rest.Config, traceImage string, targetPod *corev1.Pod, namespace string, socketPath string) *KStracer {
+func NewKStracer(clientset kubernetes.Interface, restConfig *rest.Config, traceImage string, targetPod *corev1.Pod, namespace string, socketPath string, timeout time.Duration, outputDirectory string) *KStracer {
 	straceObject := KStracer{
 		traceImage:     traceImage,
 		traceNamespace: namespace,
@@ -52,6 +54,9 @@ func NewKStracer(clientset kubernetes.Interface, restConfig *rest.Config, traceI
 		client:         clientset,
 		targetPod:      targetPod,
 		socketPath:     socketPath,
+		// TODO: the following have not been used
+		collectionTimeout: timeout,
+		outputDirectory:   outputDirectory,
 	}
 
 	return &straceObject
@@ -129,8 +134,10 @@ func getPodDefinition(options PrivilegedPodOptions) *corev1.Pod {
 }
 
 func waitForPodRunning(clientset kubernetes.Interface, namespace string, pod string) error {
+	timeout := time.Second * 30
+
 	checkPodState := func() bool {
-		// TODO WaitGroup
+
 		podStatus, err := clientset.CoreV1().Pods(namespace).Get(context.TODO(), pod, metav1.GetOptions{})
 		if err != nil {
 			return false
@@ -143,13 +150,19 @@ func waitForPodRunning(clientset kubernetes.Interface, namespace string, pod str
 		return false
 	}
 
-	// TODO Replace with WaitGroup
-	for {
+	for timeout > 0 {
+		log.Debugf("Waiting for Tracer Pod %q to become ready", pod)
 		if checkPodState() {
 			break
 		}
-		log.Debugf("Waiting for Tracer Pod %q to become ready", pod)
-		time.Sleep(time.Second)
+
+		// Sleep
+		time.Sleep(time.Second * 2)
+		timeout -= time.Second * 2
+	}
+
+	if timeout <= 0 {
+		return fmt.Errorf("tracer pod did not start correctly. review event objects from namespace %q relating to pod %q for more information", namespace, pod)
 	}
 	return nil
 }
@@ -219,6 +232,7 @@ func (tracer *KStracer) CreateStracePod(ctx context.Context, options PrivilegedP
 
 func (tracer *KStracer) StartStrace(targetPID int64) error {
 	// TODO Replace with other stream
+	// TODO Set timeout for collection
 	stdOut := os.Stdout
 	stdErr := os.Stderr
 
@@ -245,6 +259,10 @@ func (tracer *KStracer) StartStrace(targetPID int64) error {
 func (tracer *KStracer) Cleanup() error {
 	ctx := context.TODO()
 	// Delete Pod
+	if tracer == nil || tracer.tracePod == nil {
+		return nil
+	}
+
 	err := tracer.client.CoreV1().Pods(tracer.tracePod.Namespace).Delete(ctx, tracer.tracePod.Name, metav1.DeleteOptions{})
 	if err != nil {
 		log.Fatalf("unable to delete strace pod %q from namespace %q. manual deletion is required.", tracer.tracePod.Name, tracer.tracePod.Namespace)

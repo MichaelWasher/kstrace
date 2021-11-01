@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/michaelwasher/kube-strace/pkg/kstrace"
@@ -18,28 +19,48 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 )
 
+// Optional CLI flags
 type KubeStraceCommandArgs struct {
-	traceImage *string
-	socketPath *string
+	traceImage      *string
+	traceTimeoutStr *string
+	socketPath      *string
+	logLevelStr     *string
+	outputDirectory *string
 }
 type KubeStraceCommand struct {
 	KubeStraceCommandArgs
-	clientset  *kubernetes.Clientset
+
+	// Converted flags
+	logLevel     log.Level
+	traceTimeout time.Duration
+
+	// Command state
+	tracers    []*kstrace.KStracer
 	targetPods []corev1.Pod
 
-	builder    *resource.Builder
-	restConfig *rest.Config
-
+	// GenericCLI Options
+	clientset       *kubernetes.Clientset
+	builder         *resource.Builder
+	restConfig      *rest.Config
 	kubeConfigFlags *genericclioptions.ConfigFlags
+}
 
-	tracers  []*kstrace.KStracer
-	loglevel log.Level
+func stringptr(val string) *string {
+	return &val
+}
+
+func NewKubeStraceDefaults() KubeStraceCommandArgs {
+	return KubeStraceCommandArgs{
+		traceImage:      stringptr("quay.io/mwasher/crictl:0.0.2"),
+		socketPath:      stringptr("/run/crio/crio.sock"),
+		logLevelStr:     stringptr("info"),
+		traceTimeoutStr: stringptr("0"),
+		outputDirectory: stringptr("strace-collection"),
+	}
 }
 
 func NewKubeStraceCommand(applicationName string) *cobra.Command {
-	kCmd := &KubeStraceCommand{
-		loglevel: log.TraceLevel,
-	}
+	kCmd := &KubeStraceCommand{KubeStraceCommandArgs: NewKubeStraceDefaults()}
 
 	cmd := &cobra.Command{
 		Use:   applicationName,
@@ -62,57 +83,84 @@ func NewKubeStraceCommand(applicationName string) *cobra.Command {
 	}
 	// Add Kubectl / Kubernetes CLI flags
 	flags := cmd.PersistentFlags()
-	kCmd.kubeConfigFlags = genericclioptions.NewConfigFlags(true)
+
+	stringptr := func(val string) *string {
+		return &val
+	}
+
+	kCmd.kubeConfigFlags = &genericclioptions.ConfigFlags{
+		Namespace: stringptr(""),
+		Timeout:   stringptr("30s"),
+	}
+
 	kCmd.kubeConfigFlags.AddFlags(flags)
 
 	// Add command-specific flags
-	kCmd.socketPath = flags.String("socket-path", "/run/crio/crio.sock", "The location of the CRI socket on the host machine. The defaults for common runtimes are as below: [ default /run/crio/crio.sock ] used to mount through")
-	kCmd.traceImage = flags.String("image", "quay.io/mwasher/crictl:0.0.2", "The trace image for use when performing the strace.")
+	flags.StringVar(kCmd.socketPath, "socket-path", *kCmd.socketPath, "The location of the CRI socket on the host machine.")
+	flags.StringVar(kCmd.traceImage, "image", *kCmd.traceImage, "The trace image for use when performing the strace.")
+	flags.StringVar(kCmd.traceTimeoutStr, "trace-timeout", *kCmd.traceTimeoutStr, "The length of time to capture the strace output for.")
+	flags.StringVarP(kCmd.outputDirectory, "output", "o", *kCmd.outputDirectory, "The directory to store the strace data.")
+
+	// LogLevels
+	logLevels := func() []string {
+		levels := []string{}
+
+		for _, level := range log.AllLevels {
+			levelStr, err := level.MarshalText()
+			if err != nil {
+				continue
+			}
+
+			levels = append(levels, string(levelStr))
+		}
+		return levels
+	}()
+	flags.StringVar(kCmd.logLevelStr, "log-level", *kCmd.logLevelStr, fmt.Sprintf("The verbosity level of the output from the command. Available options are [%s].", strings.Join(logLevels, ", ")))
 
 	return cmd
 }
 
 func (kCmd *KubeStraceCommand) configureClientset() error {
+	// Setup REST APi conf
 	var err error
 
-	configFlags := genericclioptions.NewConfigFlags(true)
-	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		&clientcmd.ClientConfigLoadingRules{ExplicitPath: configFlags.ToRawKubeConfigLoader().ConfigAccess().GetDefaultFilename()},
+	kCmd.restConfig, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kCmd.kubeConfigFlags.ToRawKubeConfigLoader().ConfigAccess().GetDefaultFilename()},
 		&clientcmd.ConfigOverrides{},
 	).ClientConfig()
-
-	if err != nil {
-		return err
-	}
-	restConfig.Timeout = 30 * time.Second
-
-	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return err
 	}
 
-	kCmd.clientset, kCmd.restConfig = clientset, restConfig
+	kCmd.clientset, err = kubernetes.NewForConfig(kCmd.restConfig)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
 func (kCmd *KubeStraceCommand) Complete(cmd *cobra.Command, args []string) error {
 	var err error
 
-	if kCmd.loglevel != log.InfoLevel {
-		log.Infof("Running with loglevel: %v", kCmd.loglevel)
-		log.SetLevel(kCmd.loglevel)
+	// Configure the loglevel
+	log.Info(*kCmd.logLevelStr)
+	kCmd.logLevel, err = log.ParseLevel(*kCmd.logLevelStr)
+	if err != nil {
+		return err
 	}
 
+	log.SetLevel(kCmd.logLevel)
+	log.Infof("Running with loglevel: %v", kCmd.logLevel)
+
+	// Configure ClientSet and API communication
 	err = kCmd.configureClientset()
 	if err != nil {
 		return err
 	}
 
-	// Create flag factory
 	matchVersionKubeConfigFlags := cmdutil.NewMatchVersionFlags(kCmd.kubeConfigFlags)
 	f := cmdutil.NewFactory(matchVersionKubeConfigFlags)
 
-	// TODO Deal with -n Namespace overwrites
 	namespace, _, err := f.ToRawKubeConfigLoader().Namespace()
 	if err != nil {
 		return err
@@ -126,19 +174,36 @@ func (kCmd *KubeStraceCommand) Complete(cmd *cobra.Command, args []string) error
 }
 
 func (kCmd *KubeStraceCommand) Validate() error {
-	// TODO Perform Validation on the Flags
-	return nil
-}
-
-func (kCmd *KubeStraceCommand) Run() error {
 	var err error
-	ctx := context.TODO()
 
 	// Collect target pods
 	kCmd.targetPods, err = processResources(kCmd.builder, kCmd.clientset)
 	if err != nil {
 		return err
 	}
+
+	// Check flags are valid
+	if len(kCmd.targetPods) < 1 {
+		return fmt.Errorf("a target pod must be defined")
+	}
+	if len(kCmd.targetPods) > 1 && *kCmd.outputDirectory == "-" {
+		return fmt.Errorf("cannot have multiple target pods but output to standard out")
+	}
+	if len(kCmd.targetPods[0].Spec.Containers) > 1 && *kCmd.outputDirectory == "-" {
+		return fmt.Errorf("there are multiple containers defined for pod %q. unable to output to standard out for pods with multiple containers", kCmd.targetPods[0].Name)
+	}
+
+	kCmd.traceTimeout, err = time.ParseDuration(*kCmd.traceTimeoutStr)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (kCmd *KubeStraceCommand) Run() error {
+	var err error
+	ctx := context.TODO()
 
 	// Create namespace for Strace Pods
 	ns, err := kstrace.CreateNamespace(ctx, kCmd.clientset)
@@ -150,12 +215,10 @@ func (kCmd *KubeStraceCommand) Run() error {
 
 	// Create Tracers for each Pod
 	for _, targetPod := range kCmd.targetPods {
-		tracer := kstrace.NewKStracer(kCmd.clientset, kCmd.restConfig, *kCmd.traceImage, &targetPod, ns.Name, *kCmd.socketPath)
-
+		tracer := kstrace.NewKStracer(kCmd.clientset, kCmd.restConfig, *kCmd.traceImage, &targetPod, ns.Name, *kCmd.socketPath, kCmd.traceTimeout, *kCmd.outputDirectory)
 		kCmd.tracers = append(kCmd.tracers, tracer)
 	}
 
-	// TODO: Configure the desired output streams
 	for _, tracer := range kCmd.tracers {
 		// TODO Place in goroutine
 		err = tracer.Start()
