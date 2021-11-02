@@ -2,11 +2,11 @@ package kstrace
 
 import (
 	"context"
-	"io"
 
 	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -22,9 +22,7 @@ type ExecRequest struct {
 	PodName    string
 	Namespace  string
 	Command    string
-	Stdin      io.Reader
-	Stdout     io.Writer
-	Stderr     io.Writer
+	IOStreams  *genericclioptions.IOStreams
 	TTY        bool
 }
 
@@ -37,9 +35,9 @@ func ExecCommand(reqOptions ExecRequest) (int, error) {
 	}
 	option := &corev1.PodExecOptions{
 		Command: cmd,
-		Stdin:   reqOptions.Stdin != nil,
-		Stdout:  reqOptions.Stdout != nil,
-		Stderr:  reqOptions.Stderr != nil,
+		Stdin:   reqOptions.IOStreams.In != nil,
+		Stdout:  reqOptions.IOStreams.Out != nil,
+		Stderr:  reqOptions.IOStreams.ErrOut != nil,
 		TTY:     reqOptions.TTY,
 	}
 	req := reqOptions.Client.CoreV1().RESTClient().Post().Resource("pods").Name(reqOptions.PodName).
@@ -49,30 +47,27 @@ func ExecCommand(reqOptions ExecRequest) (int, error) {
 	if err != nil {
 		return exitCode, err
 	}
+
+	// This is a blocking statement - Manage the bidi stream in Goroutine
 	err = exec.Stream(remotecommand.StreamOptions{
-		Stdin:  reqOptions.Stdin,
-		Stdout: reqOptions.Stdout,
-		Stderr: reqOptions.Stderr,
+		Stdin:  reqOptions.IOStreams.In,
+		Stdout: reqOptions.IOStreams.Out,
+		Stderr: reqOptions.IOStreams.ErrOut,
 	})
-	if err != nil {
-		return exitCode, err
-	}
 
 	if err != nil {
 		if exitErr, ok := err.(utilexec.ExitError); ok && exitErr.Exited() {
 			exitCode = exitErr.ExitStatus()
-			log.Debugf("Command %q failed with exit code: %d", reqOptions.Command, exitCode)
-			log.Debugf("Command %q failed with exit code %d and error %v", reqOptions.Command, exitCode, err)
+			log.Debugf("Command %q exited with code: %d", reqOptions.Command, exitCode)
 			return exitCode, nil
 		}
 		return exitCode, err
 	}
-
 	return exitCode, nil
 }
 
 func CreateNamespace(ctx context.Context, clientset kubernetes.Interface) (*corev1.Namespace, error) {
-	return clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+	ns, err := clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "kstrace-",
 			Labels: map[string]string{
@@ -80,13 +75,19 @@ func CreateNamespace(ctx context.Context, clientset kubernetes.Interface) (*core
 			},
 		},
 	}, metav1.CreateOptions{})
+
+	if err == nil {
+		log.Infof("Namespace %q Created", ns.Name)
+	}
+
+	return ns, err
+
 }
 
-func CleanupNamespace(ctx context.Context, client kubernetes.Interface, namespace string) error {
+func CleanupNamespace(ctx context.Context, client kubernetes.Interface, namespace string) {
 	// Delete Namespace
 	err := client.CoreV1().Namespaces().Delete(ctx, namespace, metav1.DeleteOptions{})
 	if err != nil {
 		log.Fatalf("unable to delete strace namespace %q. manual deletion is required.", namespace)
 	}
-	return err
 }

@@ -20,7 +20,15 @@ kubectl apply -f $ASSET_DIR/target_pod.yaml
 kubectl wait --for=condition=Ready=true pod/$POD_NAME
 
 # Start Trace
-$KSTRACE_BIN --trace-timeout=10s --log-level=trace --output - --socket-path="/run/k3s/containerd/containerd.sock" pod/$POD_NAME &>/tmp/test_logfile.log 
+$KSTRACE_BIN --trace-timeout=10s --log-level=trace --output - --socket-path="/run/k3s/containerd/containerd.sock" pod/$POD_NAME >/tmp/test_logfile.log &
+
+# Check deployment with test
+DEPLOYMENT_NAME=target-deployment
+kubectl apply -f $ASSET_DIR/target_deployment.yaml
+kubectl wait --for=condition=Available=true deploy/$DEPLOYMENT_NAME
+
+# Start Trace
+$KSTRACE_BIN --log-level=trace --socket-path="/run/k3s/containerd/containerd.sock" deploy/$DEPLOYMENT_NAME >/tmp/test_logfile.log
 
 # Search for expected results
 cat /tmp/test_logfile.log | grep execve

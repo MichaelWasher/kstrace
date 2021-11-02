@@ -1,6 +1,9 @@
 package main
 
 import (
+	"path/filepath"
+	"strings"
+
 	log "github.com/sirupsen/logrus"
 
 	"os"
@@ -10,13 +13,19 @@ import (
 )
 
 func main() {
-	flags := pflag.NewFlagSet("kubectl-strace", pflag.ExitOnError)
+	// If deployed as `kubectl-*` rename to `kubectl *` for Krew best-practices
+	applicationName := filepath.Base(os.Args[0])
+	if strings.HasPrefix(applicationName, "kubectl-") {
+		applicationName = "kubectl strace"
+	}
+
+	flags := pflag.NewFlagSet(applicationName, pflag.ExitOnError)
 	pflag.CommandLine = flags
 
-	root := cmd.NewKubeStraceCommand()
+	root := cmd.NewKubeStraceCommand(applicationName)
 	if err := root.Execute(); err != nil {
-		log.Debugf("The program has failed with error: %v", err)
-		log.Fatal("The program has encountered a problem and needs to close. Please try again.")
+		log.Debugf("%s has failed with error: %v", applicationName, err)
+		log.Fatalf("%s has encountered a problem and needs to close. Please try again.", applicationName)
 		os.Exit(1)
 	}
 }
