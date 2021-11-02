@@ -36,16 +36,15 @@ type KubeStraceCommand struct {
 	loglevel log.Level
 }
 
-func NewKubeStraceCommand() *cobra.Command {
+func NewKubeStraceCommand(applicationName string) *cobra.Command {
 	kCmd := &KubeStraceCommand{
 		loglevel: log.TraceLevel,
 	}
 
 	cmd := &cobra.Command{
-		Use:   "kubectl-strace",
+		Use:   applicationName,
 		Short: "Run strace against Pods and Deployments in Kubernetes",
-		Long: `kubectl-strace is a CLI tool that provides the ability to easily perform
-		debugging of system-calls and process state for applications running on the Kubernetes platform.`,
+		Long:  fmt.Sprintf(`%q is a CLI tool that provides the ability to easily perform debugging of system-calls and process state for applications running on the Kubernetes platform.`, applicationName),
 		RunE: func(cmd *cobra.Command, args []string) error {
 
 			if err := kCmd.Complete(cmd, args); err != nil {
