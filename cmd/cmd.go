@@ -231,23 +231,19 @@ func (kCmd *KubeStraceCommand) Run() error {
 	}
 
 	for _, tracer := range kCmd.tracers {
-		// Overwrite tracer with local variable
-		tracer := tracer
-
 		// Async start all tracers
 		tracerWaitGroup.Add(1)
-		go func() {
+		go func(tracer kstrace.Tracer) {
 			err = tracer.Start()
+			defer tracer.Cleanup()
+
 			tracerWaitGroup.Done()
-		}()
+			if err != nil {
+				log.Errorf("Once of the collections has failed and may require manual cleanup. Please ensure the %q Namespace is removed.", ns.Name)
+				return
+			}
 
-		// Clean up on function return
-		defer tracer.Cleanup()
-		defer tracer.Stop()
-
-		if err != nil {
-			return err
-		}
+		}(tracer)
 	}
 	tracerWaitGroup.Wait()
 
@@ -275,6 +271,7 @@ func processResources(builder *resource.Builder, clientset *kubernetes.Clientset
 
 		case *corev1.Service:
 			// Collect the pods associated with the Service and add to podSlice
+			log.Debugf("Adding service to strace list %v", obj)
 			labelSet := labels.Set(obj.Spec.Selector)
 
 			queryResp, err := getPodsForLabel(&labelSet, obj.Namespace, clientset)
@@ -286,6 +283,7 @@ func processResources(builder *resource.Builder, clientset *kubernetes.Clientset
 			podSlice = append(podSlice, queryResp.Items...)
 		case *appsv1.Deployment:
 			// Collect the pods associated with the Deployment Labels and add to podSlice
+			log.Debugf("Adding deployment to strace list %v", obj)
 			labelSet := labels.Set(obj.Spec.Template.Labels)
 
 			queryResp, err := getPodsForLabel(&labelSet, obj.Namespace, clientset)
@@ -298,6 +296,7 @@ func processResources(builder *resource.Builder, clientset *kubernetes.Clientset
 
 		case *appsv1.DaemonSet:
 			// Collect the SVC associated with Deployment
+			log.Debugf("Adding daemonset to strace list %v", obj)
 			labelSet := labels.Set(obj.Spec.Template.Labels)
 
 			queryResp, err := getPodsForLabel(&labelSet, obj.Namespace, clientset)

@@ -44,20 +44,18 @@ type PrivilegedPodOptions struct {
 
 type Tracer interface {
 	Start() error
-	Stop() error
-	Cleanup() error
+	Cleanup()
 }
 
 func NewKStracer(clientset kubernetes.Interface, restConfig *rest.Config, traceImage string, targetPod *corev1.Pod, namespace string, socketPath string,
 	timeout time.Duration, outputDirectory string) Tracer {
 	straceObject := KStracer{
-		traceImage:     traceImage,
-		traceNamespace: namespace,
-		restConfig:     restConfig,
-		client:         clientset,
-		targetPod:      targetPod,
-		socketPath:     socketPath,
-		// TODO: the following have not been used
+		traceImage:        traceImage,
+		traceNamespace:    namespace,
+		restConfig:        restConfig,
+		client:            clientset,
+		targetPod:         targetPod,
+		socketPath:        socketPath,
 		collectionTimeout: timeout,
 		outputDirectory:   outputDirectory,
 	}
@@ -137,6 +135,7 @@ func getPodDefinition(options PrivilegedPodOptions) *corev1.Pod {
 }
 
 func waitForPodRunning(clientset kubernetes.Interface, namespace string, pod string) error {
+	// TODO maybe this should be relative to the collection timeout?
 	timeout := time.Second * 30
 
 	checkPodState := func() bool {
@@ -254,11 +253,6 @@ func (tracer *KStracer) Start() error {
 	return err
 }
 
-func (tracer *KStracer) Stop() error {
-	return nil
-
-}
-
 func (tracer *KStracer) CreateStracePod(ctx context.Context, options PrivilegedPodOptions) (*corev1.Pod, error) {
 	// TODO: ensure that the target pod is actually active
 	podDefinition := getPodDefinition(options)
@@ -282,6 +276,12 @@ func (tracer *KStracer) CreateStracePod(ctx context.Context, options PrivilegedP
 
 func (tracer *KStracer) StartStrace(targetPID int64, iostreams *genericclioptions.IOStreams) error {
 	command := fmt.Sprintf("strace -fp %d", targetPID)
+
+	// Configure Command Timeout
+	if tracer.collectionTimeout != 0 {
+		command = fmt.Sprintf("timeout -s 2 --preserve-status %f %s", tracer.collectionTimeout.Seconds(), command)
+	}
+
 	log.Infof("Running command %q inside pod %q", command, tracer.tracePod.Name)
 
 	execRequest := ExecRequest{
@@ -290,7 +290,8 @@ func (tracer *KStracer) StartStrace(targetPID int64, iostreams *genericclioption
 	}
 	exitCode, err := ExecCommand(execRequest)
 
-	if exitCode != 0 {
+	// NOTE: ExitCode 130 is the response from strace after getting `Ctrl+C`
+	if exitCode != 0 && exitCode != 130 {
 		return fmt.Errorf("the function has failed with exit code: %d", exitCode)
 	}
 	log.Infof("Strace command for Pod %q complete", tracer.tracePod.Name)
@@ -301,20 +302,18 @@ func (tracer *KStracer) StartStrace(targetPID int64, iostreams *genericclioption
 
 	return nil
 }
-func (tracer *KStracer) Cleanup() error {
+func (tracer *KStracer) Cleanup() {
 	ctx := context.TODO()
 	// Delete Pod
 	if tracer == nil || tracer.tracePod == nil {
-		return nil
+		return
 	}
 
 	err := tracer.client.CoreV1().Pods(tracer.tracePod.Namespace).Delete(ctx, tracer.tracePod.Name, metav1.DeleteOptions{})
 	if err != nil {
 		log.Fatalf("unable to delete strace pod %q from namespace %q. manual deletion is required.", tracer.tracePod.Name, tracer.tracePod.Namespace)
-		return err
 	}
 	tracer.tracePod = nil
-	return nil
 }
 
 func (tracer *KStracer) FindPodPIDs() ([]int64, error) {

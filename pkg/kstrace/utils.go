@@ -48,7 +48,7 @@ func ExecCommand(reqOptions ExecRequest) (int, error) {
 		return exitCode, err
 	}
 
-	// TODO: Blocking statement - Manage the bidi stream in Goroutine
+	// This is a blocking statement - Manage the bidi stream in Goroutine
 	err = exec.Stream(remotecommand.StreamOptions{
 		Stdin:  reqOptions.IOStreams.In,
 		Stdout: reqOptions.IOStreams.Out,
@@ -58,8 +58,7 @@ func ExecCommand(reqOptions ExecRequest) (int, error) {
 	if err != nil {
 		if exitErr, ok := err.(utilexec.ExitError); ok && exitErr.Exited() {
 			exitCode = exitErr.ExitStatus()
-			log.Debugf("Command %q failed with exit code: %d", reqOptions.Command, exitCode)
-			log.Debugf("Command %q failed with exit code %d and error %v", reqOptions.Command, exitCode, err)
+			log.Debugf("Command %q exited with code: %d", reqOptions.Command, exitCode)
 			return exitCode, nil
 		}
 		return exitCode, err
@@ -85,11 +84,10 @@ func CreateNamespace(ctx context.Context, clientset kubernetes.Interface) (*core
 
 }
 
-func CleanupNamespace(ctx context.Context, client kubernetes.Interface, namespace string) error {
+func CleanupNamespace(ctx context.Context, client kubernetes.Interface, namespace string) {
 	// Delete Namespace
 	err := client.CoreV1().Namespaces().Delete(ctx, namespace, metav1.DeleteOptions{})
 	if err != nil {
 		log.Fatalf("unable to delete strace namespace %q. manual deletion is required.", namespace)
 	}
-	return err
 }

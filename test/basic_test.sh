@@ -20,10 +20,7 @@ kubectl apply -f $ASSET_DIR/target_pod.yaml
 kubectl wait --for=condition=Ready=true pod/$POD_NAME
 
 # Start Trace
-$KSTRACE_BIN --trace-timeout=10s --log-level=trace --output - --socket-path="/run/k3s/containerd/containerd.sock" pod/$POD_NAME >/tmp/test_logfile.log &
-
-# Sleep 150 seconds and kill the trace
-sleep 150 && kill %1
+$KSTRACE_BIN --trace-timeout=10s --log-level=trace --output - --socket-path="/run/k3s/containerd/containerd.sock" pod/$POD_NAME &>/tmp/test_logfile.log 
 
 # Search for expected results
 cat /tmp/test_logfile.log | grep execve
