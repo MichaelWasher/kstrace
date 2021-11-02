@@ -1,5 +1,6 @@
 package cmd
 
+// TODO Clean up imports
 import (
 	"context"
 	"fmt"
@@ -11,7 +12,11 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"k8s.io/apimachinery/pkg/labels"
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/resource"
@@ -268,6 +273,41 @@ func processResources(builder *resource.Builder, clientset *kubernetes.Clientset
 			log.Debugf("Adding pod to strace list %v", obj)
 			podSlice = append(podSlice, *obj)
 
+		case *corev1.Service:
+			// Collect the pods associated with the Service and add to podSlice
+			labelSet := labels.Set(obj.Spec.Selector)
+
+			queryResp, err := getPodsForLabel(&labelSet, obj.Namespace, clientset)
+			if err != nil {
+				log.Infof("unable to get list of Pods for Service %v. %v", obj, err)
+				return err
+			}
+
+			podSlice = append(podSlice, queryResp.Items...)
+		case *appsv1.Deployment:
+			// Collect the pods associated with the Deployment Labels and add to podSlice
+			labelSet := labels.Set(obj.Spec.Template.Labels)
+
+			queryResp, err := getPodsForLabel(&labelSet, obj.Namespace, clientset)
+			if err != nil {
+				log.Infof("unable to get list of Pods for Deployment %v. %v", obj, err)
+				return err
+			}
+
+			podSlice = append(podSlice, queryResp.Items...)
+
+		case *appsv1.DaemonSet:
+			// Collect the SVC associated with Deployment
+			labelSet := labels.Set(obj.Spec.Template.Labels)
+
+			queryResp, err := getPodsForLabel(&labelSet, obj.Namespace, clientset)
+			if err != nil {
+				log.Infof("unable to get list of Pods for DaemonSet %v. %v", obj, err)
+				return err
+			}
+
+			podSlice = append(podSlice, queryResp.Items...)
+
 		default:
 			visitErr = fmt.Errorf("%q not supported by kstrace", info.Mapping.GroupVersionKind)
 		}
@@ -284,4 +324,19 @@ func processResources(builder *resource.Builder, clientset *kubernetes.Clientset
 	log.Tracef("Pod List: '%v'", podSlice)
 
 	return podSlice, nil
+}
+
+func getPodsForLabel(labelSet *labels.Set, namespace string, clientset *kubernetes.Clientset) (*corev1.PodList, error) {
+	ctx := context.TODO()
+	labelSelector := labelSet.AsSelector().String()
+
+	options := metav1.ListOptions{
+		LabelSelector: labelSelector,
+		Limit:         10,
+	}
+
+	pods, err := clientset.CoreV1().Pods(namespace).List(ctx, options)
+	log.Infof("Finished collecting Pods for Labelset %v", *labelSet)
+	log.Infof("Pods found: [ %v ]", pods)
+	return pods, err
 }

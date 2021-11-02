@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: target-deployment
+  labels:
+    app: target
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: target
+  template:
+    metadata:
+      labels:
+        app: target
+    spec:
+      containers:
+      - image: quay.io/libpod/alpine:latest
+        name: target-pod
+        command:
+        - sh
+        - -c
+        - "while : ; do if [[ -f '/tmp/test-fail' ]] ; then  echo 'failed' ; else echo 'passed' ; touch /tmp/test-file; fi ; sleep 1; done"
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
