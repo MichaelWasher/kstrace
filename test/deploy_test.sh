@@ -10,7 +10,7 @@ LOG_FILE=/tmp/test_logfile.log
 set -x
 
 # Trap signals and process
-trap 'trap - SIGTERM && kill 0' SIGINT SIGTERM EXIT
+trap 'trap - SIGTERM && kill 0' SIGINT SIGTERM
 
 # Remove log file
 rm -f $LOG_FILE
@@ -28,10 +28,7 @@ kubectl apply -f $ASSET_DIR/target_deployment.yaml
 kubectl wait --for=condition=Available=true deploy/$DEPLOYMENT_NAME
 
 # Start Trace
-$KSTRACE_BIN --log-level=trace --socket-path="/run/k3s/containerd/containerd.sock" deploy/$DEPLOYMENT_NAME >/tmp/test_logfile.log &
-
-# Sleep 150 seconds and kill the trace
-sleep 50 && kill %1
+$KSTRACE_BIN --log-level=trace --socket-path="/run/k3s/containerd/containerd.sock" deploy/$DEPLOYMENT_NAME >/tmp/test_logfile.log
 
 # Search for expected results
 cat /tmp/test_logfile.log | grep execve
@@ -43,5 +40,6 @@ if [ $retVal -ne 0 ]; then
     exit $retVal
 else
     echo "The test has passed"
+    exit 0
 fi
 

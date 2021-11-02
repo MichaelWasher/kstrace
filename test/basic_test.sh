@@ -10,7 +10,7 @@ LOG_FILE=/tmp/test_logfile.log
 set -x
 
 # Trap signals and process
-trap 'trap - SIGTERM && kill 0' SIGINT SIGTERM EXIT
+trap 'trap - SIGTERM && kill 0' SIGINT SIGTERM
 
 # Remove log file
 rm -f $LOG_FILE
@@ -32,5 +32,6 @@ if [ $retVal -ne 0 ]; then
     exit $retVal
 else
     echo "The test has passed"
+    exit 0
 fi
 

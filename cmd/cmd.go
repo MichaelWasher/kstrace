@@ -4,8 +4,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/michaelwasher/kube-strace/pkg/kstrace"
@@ -214,9 +217,17 @@ func (kCmd *KubeStraceCommand) Run() error {
 	var err error
 	ctx := context.TODO()
 
+	// Pass signal handler pointer to list of functions
+	cleanupFunctions := []func(){}
+	closeSignalHandler := kCmd.setupSignalHandler(&cleanupFunctions)
+
 	// Create namespace for Strace Pods
 	ns, err := kstrace.CreateNamespace(ctx, kCmd.clientset)
+
 	defer kstrace.CleanupNamespace(ctx, kCmd.clientset, ns.Name)
+	cleanupFunctions = append(cleanupFunctions, func() {
+		kstrace.CleanupNamespace(ctx, kCmd.clientset, ns.Name)
+	})
 
 	if err != nil {
 		return err
@@ -230,12 +241,18 @@ func (kCmd *KubeStraceCommand) Run() error {
 		kCmd.tracers = append(kCmd.tracers, tracer)
 	}
 
+	// Perform Trace
 	for _, tracer := range kCmd.tracers {
 		// Async start all tracers
 		tracerWaitGroup.Add(1)
 		go func(tracer kstrace.Tracer) {
 			err = tracer.Start()
+
+			// Configure Cleanup
 			defer tracer.Cleanup()
+			cleanupFunctions = append(cleanupFunctions, func() {
+				kstrace.CleanupNamespace(ctx, kCmd.clientset, ns.Name)
+			})
 
 			tracerWaitGroup.Done()
 			if err != nil {
@@ -245,7 +262,11 @@ func (kCmd *KubeStraceCommand) Run() error {
 
 		}(tracer)
 	}
+	// Wait for tracers
 	tracerWaitGroup.Wait()
+
+	// Remove signal catcher
+	closeSignalHandler <- true
 
 	return nil
 }
@@ -338,4 +359,27 @@ func getPodsForLabel(labelSet *labels.Set, namespace string, clientset *kubernet
 	log.Infof("Finished collecting Pods for Labelset %v", *labelSet)
 	log.Infof("Pods found: [ %v ]", pods)
 	return pods, err
+}
+func (kCmd *KubeStraceCommand) setupSignalHandler(cleanupFunctions *[]func()) chan interface{} {
+	signals := make(chan os.Signal, 1)
+	exit := make(chan interface{})
+
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		select {
+		case sig := <-signals:
+			if sig == syscall.SIGINT || sig == syscall.SIGTERM {
+				log.Info("Cleanup signal received")
+				for _, cleanupFunc := range *cleanupFunctions {
+					cleanupFunc()
+				}
+				log.Info("Closing...")
+				os.Exit(130)
+			}
+		case <-exit:
+			return
+		}
+
+	}()
+	return exit
 }
