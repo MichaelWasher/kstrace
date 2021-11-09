@@ -159,13 +159,14 @@ func (kCmd *KubeStraceCommand) Complete(cmd *cobra.Command, args []string) error
 	var err error
 
 	// Configure log-file
-	logFile, err := os.OpenFile(*kCmd.logFile, os.O_WRONLY|os.O_CREATE, 0755)
-	if err != nil {
-		log.Error("unable to open the defined log-file. ensure the file path is valid")
-		return err
+	if *kCmd.logFile != "-" {
+		logFile, err := os.OpenFile(*kCmd.logFile, os.O_WRONLY|os.O_CREATE, 0755)
+		if err != nil {
+			log.Error("unable to open the defined log-file. ensure the file path is valid")
+			return err
+		}
+		logrus.SetOutput(logFile)
 	}
-	logrus.SetOutput(logFile)
-
 	// Configure the loglevel
 	log.Info(*kCmd.logLevelStr)
 	kCmd.logLevel, err = log.ParseLevel(*kCmd.logLevelStr)
