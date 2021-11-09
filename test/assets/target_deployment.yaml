@@ -15,11 +15,11 @@ spec:
         app: target
     spec:
       containers:
-      - image: quay.io/libpod/alpine:latest
-        name: target-pod
+      - image: alpine:latest
+        name: target-deployment
         command:
         - sh
         - -c
-        - "while : ; do if [[ -f '/tmp/test-fail' ]] ; then  echo 'failed' ; else echo 'passed' ; touch /tmp/test-file; fi ; sleep 1; done"
+        - "while : ; do touch /tmp/test-file; sleep 1; done"
       dnsPolicy: ClusterFirst
       restartPolicy: Always

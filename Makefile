@@ -22,4 +22,4 @@ test:   build
 	go test -race ./...
 
 test-e2e: build
-	cd test && bash ./basic_test.sh 
+	cd test && bash ./test.sh

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/michaelwasher/kube-strace/pkg/kstrace"
+	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
@@ -37,6 +38,7 @@ type KubeStraceCommandArgs struct {
 	traceTimeoutStr *string
 	socketPath      *string
 	logLevelStr     *string
+	logFile         *string
 	outputDirectory *string
 }
 type KubeStraceCommand struct {
@@ -68,6 +70,7 @@ func NewKubeStraceDefaults() KubeStraceCommandArgs {
 		logLevelStr:     stringptr("info"),
 		traceTimeoutStr: stringptr("0"),
 		outputDirectory: stringptr("strace-collection"),
+		logFile:         stringptr("-"),
 	}
 }
 
@@ -113,7 +116,7 @@ func NewKubeStraceCommand(applicationName string) *cobra.Command {
 	flags.StringVar(kCmd.traceTimeoutStr, "trace-timeout", *kCmd.traceTimeoutStr, "The length of time to capture the strace output for.")
 	flags.StringVarP(kCmd.outputDirectory, "output", "o", *kCmd.outputDirectory, "The directory to store the strace data.")
 
-	// LogLevels
+	// Logging
 	logLevels := func() []string {
 		levels := []string{}
 
@@ -128,6 +131,7 @@ func NewKubeStraceCommand(applicationName string) *cobra.Command {
 		return levels
 	}()
 	flags.StringVar(kCmd.logLevelStr, "log-level", *kCmd.logLevelStr, fmt.Sprintf("The verbosity level of the output from the command. Available options are [%s].", strings.Join(logLevels, ", ")))
+	flags.StringVar(kCmd.logFile, "log-file", *kCmd.logFile, "Send logs to a file.")
 
 	return cmd
 }
@@ -153,6 +157,14 @@ func (kCmd *KubeStraceCommand) configureClientset() error {
 }
 func (kCmd *KubeStraceCommand) Complete(cmd *cobra.Command, args []string) error {
 	var err error
+
+	// Configure log-file
+	logFile, err := os.OpenFile(*kCmd.logFile, os.O_WRONLY|os.O_CREATE, 0755)
+	if err != nil {
+		log.Error("unable to open the defined log-file. ensure the file path is valid")
+		return err
+	}
+	logrus.SetOutput(logFile)
 
 	// Configure the loglevel
 	log.Info(*kCmd.logLevelStr)
@@ -250,9 +262,6 @@ func (kCmd *KubeStraceCommand) Run() error {
 
 			// Configure Cleanup
 			defer tracer.Cleanup()
-			cleanupFunctions = append(cleanupFunctions, func() {
-				kstrace.CleanupNamespace(ctx, kCmd.clientset, ns.Name)
-			})
 
 			tracerWaitGroup.Done()
 			if err != nil {
