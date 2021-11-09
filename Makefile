@@ -1,10 +1,16 @@
 PROJECT_NAME=kubectl-strace
-VERSION=0.0.2
 REPOSITORY=quay.io/mwasher
+
 IMAGE=crictl
 
+SUPPORTED_OS= darwin linux
+SUPPORTED_ARCH=amd64
+
+VERSION=0.0.1
+
 build:
-	go build -o bin/${PROJECT_NAME} main.go
+	GIT_COMMIT=$$(git rev-list -1 HEAD)
+	go build -o bin/${PROJECT_NAME} -ldflags "-X cmd.Version.Tag=${VERSION} -X cmd.Version.Commit=$${GIT_COMMIT}" main.go 
 
 run:
 	go run main.go
@@ -13,13 +19,31 @@ docker:
 	docker build -t ${REPOSITORY}/${IMAGE}:${VERSION} .
 	docker push  ${REPOSITORY}/${IMAGE}:${VERSION}
 
-all:    build
+all:   
 	echo "Compiling for every OS and Platform"
-	GOOS=linux GOARCH=amd64 go build -o bin/${PROJECT_NAME}-linux main.go
-	GOOS=darwin GOARCH=amd64 go build -o bin/${PROJECT_NAME}-darwin main.go
+	GIT_COMMIT=$$(git rev-list -1 HEAD)
+	for RELEASE_OS in ${SUPPORTED_OS} ; do \
+		for ARCH in ${SUPPORTED_ARCH} ; do \
+		GOOS=$$RELEASE_OS GOARCH=$$ARCH go build -o bin/${PROJECT_NAME}-$$RELEASE_OS-$$ARCH -ldflags \
+		"-X cmd.Version.Tag=${VERSION} -X cmd.Version.Commit=$${GIT_COMMIT}" main.go ; \
+		done \
+	done
 
 test:   build
 	go test -race ./...
 
 test-e2e: build
 	cd test && bash ./test.sh
+
+release: all
+	for RELEASE_OS in ${SUPPORTED_OS} ; do \
+		for ARCH in ${SUPPORTED_ARCH}; do \
+			echo "Building release for $$RELEASE_OS/$$ARCH" ; \
+			RELEASE_NAME=${PROJECT_NAME}-$$RELEASE_OS-$$ARCH ; \
+			mkdir $$RELEASE_NAME ; \
+			cp LICENSE $$RELEASE_NAME/ ; \
+			cp bin/$$RELEASE_NAME $$RELEASE_NAME/${PROJECT_NAME} ; \
+			tar -czf $$RELEASE_NAME-${VERSION}.tar -C $$RELEASE_NAME LICENSE ${PROJECT_NAME} ;\
+			rm -r $$RELEASE_NAME ;\
+		done \
+	done

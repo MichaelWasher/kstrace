@@ -2,3 +2,5 @@ kube-strace
 kubectl-strace
 bin/
 *__pycache__*
+*.tar
+**/.DS_Store

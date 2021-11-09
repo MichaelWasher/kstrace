@@ -32,6 +32,12 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 )
 
+// Version Information
+var Version struct {
+	Commit string
+	Tag    string
+}
+
 // Optional CLI flags
 type KubeStraceCommandArgs struct {
 	traceImage      *string
@@ -64,23 +70,28 @@ func stringptr(val string) *string {
 }
 
 func NewKubeStraceDefaults() KubeStraceCommandArgs {
-	return KubeStraceCommandArgs{
-		traceImage:      stringptr("quay.io/mwasher/crictl:0.0.2"),
+	kCmd := KubeStraceCommandArgs{
+		traceImage:      stringptr("quay.io/mwasher/crictl:0.0.1"),
 		socketPath:      stringptr("/run/crio/crio.sock"),
 		logLevelStr:     stringptr("info"),
 		traceTimeoutStr: stringptr("0"),
 		outputDirectory: stringptr("strace-collection"),
 		logFile:         stringptr("-"),
 	}
+	if Version.Tag != "" {
+		kCmd.traceImage = stringptr("quay.io/mwasher/crictl:" + Version.Tag)
+	}
+	return kCmd
 }
 
-func NewKubeStraceCommand(applicationName string) *cobra.Command {
+func NewKubeStraceCommand(appName string) *cobra.Command {
 	kCmd := &KubeStraceCommand{KubeStraceCommandArgs: NewKubeStraceDefaults()}
 
 	cmd := &cobra.Command{
-		Use:   applicationName,
-		Short: "Run strace against Pods and Deployments in Kubernetes",
-		Long:  fmt.Sprintf(`%q is a CLI tool that provides the ability to easily perform debugging of system-calls and process state for applications running on the Kubernetes platform.`, applicationName),
+		Use:     appName,
+		Short:   "Run strace against Pods and Deployments in Kubernetes",
+		Version: Version.Tag,
+		Long:    fmt.Sprintf(`%q is a CLI tool that provides the ability to easily perform debugging of system-calls and process state for applications running on the Kubernetes platform.`, appName),
 		RunE: func(cmd *cobra.Command, args []string) error {
 
 			if err := kCmd.Complete(cmd, args); err != nil {
@@ -96,6 +107,8 @@ func NewKubeStraceCommand(applicationName string) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.SetVersionTemplate(appName + `{{printf "version %s" .Version}}`)
+
 	// Add Kubectl / Kubernetes CLI flags
 	flags := cmd.PersistentFlags()
 
