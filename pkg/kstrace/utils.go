@@ -4,13 +4,17 @@ import (
 	"context"
 
 	log "github.com/sirupsen/logrus"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/cli-runtime/pkg/genericclioptions"
+
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 	utilexec "k8s.io/client-go/util/exec"
+
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+
 	"k8s.io/kubectl/pkg/scheme"
 )
 

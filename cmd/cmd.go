@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/michaelwasher/kube-strace/pkg/kstrace"
-	"github.com/sirupsen/logrus"
+
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
@@ -27,6 +27,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 	"k8s.io/kubectl/pkg/scheme"
@@ -178,7 +180,7 @@ func (kCmd *KubeStraceCommand) Complete(cmd *cobra.Command, args []string) error
 			log.Error("unable to open the defined log-file. ensure the file path is valid")
 			return err
 		}
-		logrus.SetOutput(logFile)
+		log.SetOutput(logFile)
 	}
 	// Configure the loglevel
 	log.Info(*kCmd.logLevelStr)
