@@ -11,11 +11,20 @@ The tool creates a privileged Pod in the cluster which will 'attach' to the runn
 This application also allows for strace monitoring of multiple Pods (DaemonSets, Deployments, Services) at the same time by streaming the results back into a designated folder.
 
 ## Installation
+
+### Install using [Krew](https://krew.sigs.k8s.io/):
 ~~~
-make build
+kubectl krew install strace
 ~~~
 
-*This project will be submitted as a Krew plugin shortly; hold this space*
+### Build from source:
+~~~
+# Build for the current OS
+make build && cd bin/
+
+# Cross-compile for all supported OSes
+make all && cd bin/
+~~~
 
 ## Getting Started
 
