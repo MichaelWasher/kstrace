@@ -1,6 +1,6 @@
 # kstrace
 
-This tool is a kubectl plugin that is used to collect strace data from Pods running wiht your Kubernetes cluster.
+This tool is a kubectl plugin that is used to collect strace data from Pods running with your Kubernetes cluster.
 
 ## Description
 
