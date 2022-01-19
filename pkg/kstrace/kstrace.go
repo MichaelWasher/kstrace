@@ -276,7 +276,7 @@ func (tracer *KStracer) CreateStracePod(ctx context.Context, options PrivilegedP
 }
 
 func (tracer *KStracer) StartStrace(targetPID int64, iostreams *genericclioptions.IOStreams) error {
-	command := fmt.Sprintf("strace -fp %d", targetPID)
+	command := fmt.Sprintf("strace -tfp %d", targetPID)
 
 	// Configure Command Timeout
 	if tracer.collectionTimeout != 0 {
