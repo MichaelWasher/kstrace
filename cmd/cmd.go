@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/michaelwasher/kube-strace/pkg/collection"
 	"github.com/michaelwasher/kube-strace/pkg/kstrace"
 
 	log "github.com/sirupsen/logrus"
@@ -49,6 +50,14 @@ type KubeStraceCommandArgs struct {
 	logFile         *string
 	outputDirectory *string
 }
+type PrivilegedPodOptions struct {
+	Namespace     string
+	ContainerName string
+	Image         string
+	NodeName      string
+	SocketPath    string
+}
+
 type KubeStraceCommand struct {
 	KubeStraceCommandArgs
 
@@ -57,7 +66,7 @@ type KubeStraceCommand struct {
 	traceTimeout time.Duration
 
 	// Command state
-	tracers    []kstrace.Tracer
+	tracers    []kstrace.KStracer
 	targetPods []corev1.Pod
 
 	// GenericCLI Options
@@ -250,11 +259,11 @@ func (kCmd *KubeStraceCommand) Run() error {
 	closeSignalHandler := kCmd.setupSignalHandler(&cleanupFunctions)
 
 	// Create namespace for Strace Pods
-	ns, err := kstrace.CreateNamespace(ctx, kCmd.clientset)
+	ns, err := collection.CreateNamespace(ctx, kCmd.clientset)
 
-	defer kstrace.CleanupNamespace(ctx, kCmd.clientset, ns.Name)
+	defer collection.CleanupNamespace(ctx, kCmd.clientset, ns.Name)
 	cleanupFunctions = append(cleanupFunctions, func() {
-		kstrace.CleanupNamespace(ctx, kCmd.clientset, ns.Name)
+		collection.CleanupNamespace(ctx, kCmd.clientset, ns.Name)
 	})
 
 	if err != nil {
@@ -265,7 +274,16 @@ func (kCmd *KubeStraceCommand) Run() error {
 	var tracerWaitGroup sync.WaitGroup
 	for _, targetPod := range kCmd.targetPods {
 		pod := targetPod
-		tracer := kstrace.NewKStracer(kCmd.clientset, kCmd.restConfig, *kCmd.traceImage, &pod, ns.Name, *kCmd.socketPath, kCmd.traceTimeout, *kCmd.outputDirectory)
+
+		podOptions := PrivilegedPodOptions{
+			Namespace:     ns.Name,
+			ContainerName: "container-name",
+			Image:         *kCmd.traceImage,
+			NodeName:      targetPod.Spec.NodeName,
+			SocketPath:    *kCmd.socketPath,
+		}
+
+		tracer := kstrace.NewKStracer(kCmd.clientset, kCmd.restConfig, *kCmd.traceImage, &pod, ns.Name, *kCmd.socketPath, kCmd.traceTimeout, *kCmd.outputDirectory, getPodDefinition(podOptions))
 		kCmd.tracers = append(kCmd.tracers, tracer)
 	}
 
@@ -273,8 +291,15 @@ func (kCmd *KubeStraceCommand) Run() error {
 	for _, tracer := range kCmd.tracers {
 		// Async start all tracers
 		tracerWaitGroup.Add(1)
-		go func(tracer kstrace.Tracer) {
-			err = tracer.Start()
+		go func(tracer kstrace.KStracer) {
+			options := collection.CollectionOptions{
+				Name:      tracer.TargetPod.Name,
+				Namespace: ns.Name,
+				Image:     *kCmd.traceImage,
+				NodeName:  tracer.TargetPod.Spec.NodeName,
+				Command:   "strace -fp {target_pid}",
+			}
+			err = tracer.Start(options)
 
 			// Configure Cleanup
 			defer tracer.Cleanup()
@@ -282,6 +307,7 @@ func (kCmd *KubeStraceCommand) Run() error {
 			tracerWaitGroup.Done()
 			if err != nil {
 				log.Errorf("Once of the collections has failed and may require manual cleanup. Please ensure the %q Namespace is removed.", ns.Name)
+				log.Debug(err)
 				return
 			}
 
@@ -407,4 +433,56 @@ func (kCmd *KubeStraceCommand) setupSignalHandler(cleanupFunctions *[]func()) ch
 
 	}()
 	return exit
+}
+
+func getPodDefinition(options PrivilegedPodOptions) *corev1.PodSpec {
+	// Mount the CRI socket through
+	directoryType := corev1.HostPathSocket
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "runtime-socket",
+			ReadOnly:  false,
+			MountPath: "/run/crio/crio.sock",
+		},
+	}
+	volumes := []corev1.Volume{
+		{
+			Name: "runtime-socket",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: options.SocketPath,
+					Type: &directoryType,
+				},
+			},
+		},
+	}
+	// Create Privileged container
+	privileged := true
+	privilegedContainer := corev1.Container{
+		Name:  options.ContainerName,
+		Image: options.Image,
+
+		SecurityContext: &corev1.SecurityContext{
+			Privileged: &privileged,
+			Capabilities: &corev1.Capabilities{
+				Add: []corev1.Capability{
+					corev1.Capability("SYS_ADMIN"),
+					corev1.Capability("SYS_PTRACE"),
+				},
+			},
+		},
+
+		Command:      []string{"sh", "-c", "sleep 10000000"},
+		VolumeMounts: volumeMounts,
+	}
+
+	podSpec := &corev1.PodSpec{
+		NodeName:      options.NodeName,
+		RestartPolicy: corev1.RestartPolicyNever,
+		HostPID:       true,
+		Containers:    []corev1.Container{privilegedContainer},
+		Volumes:       volumes,
+	}
+
+	return podSpec
 }
