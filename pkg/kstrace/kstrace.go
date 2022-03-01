@@ -3,7 +3,7 @@ package kstrace
 import (
 	"time"
 
-	"github.com/michaelwasher/kube-strace/pkg/collection"
+	"github.com/michaelwasher/library-collection/pkg/collection"
 	corev1 "k8s.io/api/core/v1"
 
 	"k8s.io/client-go/kubernetes"

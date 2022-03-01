@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/michaelwasher/kube-strace/pkg/collection"
 	"github.com/michaelwasher/kube-strace/pkg/kstrace"
+	"github.com/michaelwasher/library-collection/pkg/collection"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
