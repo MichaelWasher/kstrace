@@ -3,110 +3,12 @@ package collection
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 
 	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
-
-func (tracer *PodTracer) checkConfig(options CollectionOptions) error {
-	// TODO Ensure that Pod Spec and required values have been set
-	if tracer.TracerPodSpec == nil {
-		return fmt.Errorf("the Pod Spec needs to be added the tracer")
-	}
-	return nil
-}
-
-// Public function for starting the collection trace
-// CollectionOptions.Command is used as a template
-// Options: {target_pid}
-func tprintf(format string, params map[string]interface{}) string {
-	for key, val := range params {
-		format = strings.Replace(format, "{"+key+"}", fmt.Sprintf("%s", val), -1)
-	}
-	return format
-}
-
-func (tracer *PodTracer) Start(options CollectionOptions) error {
-	var err error
-	ctx := context.TODO()
-
-	err = tracer.checkConfig(options)
-	if err != nil {
-		log.Errorf("Pod tracer requires additional values")
-		return err
-	}
-
-	tracer.tracePod, err = tracer.createCollectionPod(ctx, options)
-	if err != nil {
-		return err
-	}
-
-	// Find out the PID for the requested Pod
-	log.Infof("Running %s", options.Name)
-	tracer.targetContainerPIDs, err = findPodPIDs(ctx, tracer.Client, tracer.RestConfig, tracer.TargetPod, tracer.tracePod)
-
-	if err != nil {
-		return err
-	}
-
-	// Run tracer against Pods in targetContainerPIDs
-	for index, containerPID := range tracer.targetContainerPIDs {
-		log.Debugf("Running collection for PID %d", containerPID)
-
-		// Process the command template
-		templateData := map[string]interface{}{"target_pid": fmt.Sprintf("%d", containerPID)}
-		compiledCommand := tprintf(options.Command, templateData)
-
-		// Write to a file with the container name
-		podDir := tracer.OutputDirectory
-		if podDir != "-" {
-			podDir = fmt.Sprintf("%s%c%s", tracer.OutputDirectory, os.PathSeparator, tracer.TargetPod.GetName())
-		}
-
-		iostream, err := getIOStreams(podDir, tracer.TargetPod.Spec.Containers[index].Name)
-		if err != nil {
-			return err
-		}
-
-		_, err = tracer.StartCollection(iostream, compiledCommand)
-
-		if err != nil {
-			return err
-		}
-	}
-
-	log.Info("Collection complete")
-	return err
-}
-
-func (tracer *NodeTracer) Start(options CollectionOptions) error {
-	var err error
-	ctx := context.TODO()
-
-	tracer.tracePod, err = tracer.createCollectionPod(ctx, options)
-	if err != nil {
-		return err
-	}
-
-	// Write to a file with
-	iostream, err := getIOStreams(tracer.OutputDirectory, tracer.TargetNode.GetName())
-	if err != nil {
-		return err
-	}
-
-	_, err = tracer.StartCollection(iostream, options.Command)
-
-	if err != nil {
-		return err
-	}
-
-	log.Infof("Node collection complete for %s", tracer.TargetNode.GetName())
-	return err
-}
 
 // Cleanup removes all  up the collection trace
 func (tracer *DefaultTracer) Cleanup() {

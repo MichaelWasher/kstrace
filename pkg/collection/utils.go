@@ -216,3 +216,13 @@ func getIOStreams(outputDirectory string, target string) (*genericclioptions.IOS
 		In:     nil,
 	}, nil
 }
+
+// Public function for starting the collection trace
+// CollectionOptions.Command is used as a template
+// Options: {target_pid}
+func tprintf(format string, params map[string]interface{}) string {
+	for key, val := range params {
+		format = strings.Replace(format, "{"+key+"}", fmt.Sprintf("%s", val), -1)
+	}
+	return format
+}
