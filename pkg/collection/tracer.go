@@ -21,13 +21,8 @@ func (tracer *PodTracer) checkConfig(options CollectionOptions) error {
 }
 
 // Public function for starting the collection trace
-// /// CollectionOptions.Command is used as a template
+// CollectionOptions.Command is used as a template
 // Options: {target_pid}
-// sweaters := Inventory{"wool", 17}
-// tmpl, err :=
-// if err != nil { panic(err) }
-// err = tmpl.Execute(os.Stdout, sweaters)
-// if err != nil { panic(err) }
 func tprintf(format string, params map[string]interface{}) string {
 	for key, val := range params {
 		format = strings.Replace(format, "{"+key+"}", fmt.Sprintf("%s", val), -1)
@@ -58,16 +53,20 @@ func (tracer *PodTracer) Start(options CollectionOptions) error {
 		return err
 	}
 
-	// Run Strace for collected targetContainerPIDs
+	// Run tracer against Pods in targetContainerPIDs
 	for index, containerPID := range tracer.targetContainerPIDs {
-		log.Debugf("Running strace on container %d", containerPID)
+		log.Debugf("Running collection for PID %d", containerPID)
 
 		// Process the command template
 		templateData := map[string]interface{}{"target_pid": fmt.Sprintf("%d", containerPID)}
 		compiledCommand := tprintf(options.Command, templateData)
 
 		// Write to a file with the container name
-		podDir := fmt.Sprintf("%s%c%s", tracer.OutputDirectory, os.PathSeparator, tracer.TargetPod.GetName())
+		podDir := tracer.OutputDirectory
+		if podDir != "-" {
+			podDir = fmt.Sprintf("%s%c%s", tracer.OutputDirectory, os.PathSeparator, tracer.TargetPod.GetName())
+		}
+
 		iostream, err := getIOStreams(podDir, tracer.TargetPod.Spec.Containers[index].Name)
 		if err != nil {
 			return err
@@ -80,7 +79,7 @@ func (tracer *PodTracer) Start(options CollectionOptions) error {
 		}
 	}
 
-	log.Info("Strace complete")
+	log.Info("Collection complete")
 	return err
 }
 
@@ -105,7 +104,7 @@ func (tracer *NodeTracer) Start(options CollectionOptions) error {
 		return err
 	}
 
-	log.Info("Node collection complete for %s", tracer.TargetNode.GetName())
+	log.Infof("Node collection complete for %s", tracer.TargetNode.GetName())
 	return err
 }
 
@@ -119,7 +118,7 @@ func (tracer *DefaultTracer) Cleanup() {
 
 	err := tracer.Client.CoreV1().Pods(tracer.tracePod.Namespace).Delete(ctx, tracer.tracePod.Name, metav1.DeleteOptions{})
 	if err != nil {
-		log.Fatalf("unable to delete strace pod %q from namespace %q. manual deletion is required.", tracer.tracePod.Name, tracer.tracePod.Namespace)
+		log.Fatalf("unable to delete collection pod %q from namespace %q. manual deletion may be required.", tracer.tracePod.Name, tracer.tracePod.Namespace)
 	}
 	tracer.tracePod = nil
 }
@@ -134,11 +133,11 @@ func (tracer *DefaultTracer) StartCollection(iostreams *genericclioptions.IOStre
 
 	log.Infof("Running command %q inside pod %q", command, tracer.tracePod.Name)
 
-	execRequest := ExecRequest{
+	execRequest := execRequest{
 		Client: tracer.Client, RestConfig: tracer.RestConfig, PodName: tracer.tracePod.Name,
 		Namespace: tracer.tracePod.Namespace, Command: command, TTY: false, IOStreams: iostreams,
 	}
-	exitCode, err := ExecCommand(execRequest)
+	exitCode, err := execCommand(execRequest)
 
 	log.Infof("'%s' for Pod %q completed", command, tracer.tracePod.Name)
 

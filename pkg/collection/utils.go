@@ -27,7 +27,7 @@ import (
 
 // Function is heavily based on
 // https://stackoverflow.com/questions/43314689/example-of-exec-in-k8ss-pod-by-using-go-client/54317689
-type ExecRequest struct {
+type execRequest struct {
 	Client     kubernetes.Interface
 	RestConfig *restclient.Config
 	PodName    string
@@ -37,7 +37,7 @@ type ExecRequest struct {
 	TTY        bool
 }
 
-func ExecCommand(reqOptions ExecRequest) (int, error) {
+func execCommand(reqOptions execRequest) (int, error) {
 	exitCode := 0
 	cmd := []string{
 		"sh",
@@ -77,12 +77,12 @@ func ExecCommand(reqOptions ExecRequest) (int, error) {
 	return exitCode, nil
 }
 
-func CreateNamespace(ctx context.Context, clientset kubernetes.Interface) (*corev1.Namespace, error) {
+func CreateNamespace(ctx context.Context, clientset kubernetes.Interface, name string) (*corev1.Namespace, error) {
 	ns, err := clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "kstrace-",
+			GenerateName: fmt.Sprintf("%s-", name),
 			Labels: map[string]string{
-				"kstrace-generated-namespace": "",
+				fmt.Sprintf("%s-generated-namespace", name): "",
 			},
 		},
 	}, metav1.CreateOptions{})
@@ -119,11 +119,11 @@ func findPodPIDs(ctx context.Context, client kubernetes.Interface, restConfig *r
 		command := fmt.Sprintf("crictl inspect %s", containerID)
 		log.Infof("Running command %q inside pod %q", command, tracePod.Name)
 
-		execRequest := ExecRequest{
+		execRequest := execRequest{
 			Client: client, RestConfig: restConfig, PodName: tracePod.Name,
 			Namespace: tracePod.Namespace, Command: command, IOStreams: iostreams, TTY: false,
 		}
-		exitCode, err := ExecCommand(execRequest)
+		exitCode, err := execCommand(execRequest)
 		if exitCode != 0 || err != nil {
 			return nil, err
 		}

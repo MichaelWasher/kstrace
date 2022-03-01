@@ -259,7 +259,7 @@ func (kCmd *KubeStraceCommand) Run() error {
 	closeSignalHandler := kCmd.setupSignalHandler(&cleanupFunctions)
 
 	// Create namespace for Strace Pods
-	ns, err := collection.CreateNamespace(ctx, kCmd.clientset)
+	ns, err := collection.CreateNamespace(ctx, kCmd.clientset, "kstrace")
 
 	defer collection.CleanupNamespace(ctx, kCmd.clientset, ns.Name)
 	cleanupFunctions = append(cleanupFunctions, func() {
