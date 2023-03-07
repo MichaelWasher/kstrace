@@ -40,7 +40,7 @@ jobs:
         python -m pip install -r ./test/requirements.txt
 
     # Setup Kubectl 
-    - uses: azure/setup-kubectl@v1
+    - uses: azure/setup-kubectl@v3
       id: install
 
     # Config Kubernetes Cluster
