@@ -4,7 +4,7 @@ REPOSITORY=quay.io/mwasher
 IMAGE=crictl
 
 SUPPORTED_OS= darwin linux
-SUPPORTED_ARCH=amd64
+SUPPORTED_ARCH=amd64 arm64
 
 VERSION=0.0.1
 
